@@ -6,7 +6,7 @@
   <style>
     body {
       margin: 0;
-      background: #111;
+      background: #050509;
       color: #eee;
       font-family: sans-serif;
       display: flex;
@@ -14,34 +14,37 @@
       align-items: center;
     }
     #gameCanvas {
-      border: 2px solid #444;
+      border: 2px solid #333;
       background: #000;
       image-rendering: pixelated;
+      margin-top: 8px;
     }
     #info {
-      margin-top: 8px;
-      font-size: 14px;
+      margin-top: 6px;
+      font-size: 13px;
       text-align: center;
-      max-width: 800px;
+      max-width: 900px;
+      line-height: 1.4;
     }
   </style>
 </head>
 <body>
   <canvas id="gameCanvas" width="800" height="480"></canvas>
   <div id="info">
-    <div><b>Controls:</b> Move: A/D or ←/→ · Jump: W/↑ or Space · Dash: Left Shift · Cling: hold toward wall while in air · Purify: E</div>
-    <div>Gray: normal blocks · Purple: corrupted blocks · Green: purified blocks · Red: enemies</div>
+    <div><b>Controls:</b> Move: A/D or ←/→ · Jump: W/↑/Space · Dash: Left Shift · Attack: J or Z · Purify: E</div>
+    <div>Gray = solid · Purple = corrupted · Green = purified · Red = enemies. Climb walls and reach the upper left area.</div>
   </div>
 
   <script>
-    // =========================
+    // =========================================================
     // BASIC SETUP
-    // =========================
+    // =========================================================
     const canvas = document.getElementById("gameCanvas");
     /** @type {CanvasRenderingContext2D} */
     const ctx = canvas.getContext("2d");
 
     const TILE = 32;
+
     const GRAVITY = 0.6;
     const FRICTION = 0.8;
     const MOVE_SPEED = 0.8;
@@ -50,46 +53,82 @@
     const WALL_JUMP_FORCE_X = 7;
     const WALL_JUMP_FORCE_Y = -10;
     const DASH_SPEED = 14;
-    const DASH_TIME = 10; // frames
-    const DASH_COOLDOWN = 40; // frames
+    const DASH_TIME = 10;      // frames
+    const DASH_COOLDOWN = 40;  // frames
+
+    const ATTACK_TIME = 10;    // frames
+    const ATTACK_COOLDOWN = 20;
 
     // Tile types
-    const TILE_EMPTY = 0;
-    const TILE_SOLID = 1;
+    const TILE_EMPTY    = 0;
+    const TILE_SOLID    = 1;
     const TILE_CORRUPTED = 2;
     const TILE_PURIFIED = 3;
 
-    // Simple level (25x15 tiles -> 800x480)
-    // 0 empty, 1 solid, 2 corrupted
-    const levelData = [
-      "0000000000000000000000000",
-      "0000000000000000000000000",
-      "0000000000000000000000000",
-      "0000000000000000000000000",
-      "0000000000000000000000000",
-      "0000000000000000000000000",
-      "0000000000000222200000000",
-      "0000000000000111100000000",
-      "0000000000000111100000000",
-      "0000000022200111100000000",
-      "0000000011100111100000000",
-      "0000000011100111100000000",
-      "1111111111111111111111111",
-      "1111111111111111111111111",
-      "1111111111111111111111111"
-    ].map(row => row.split("").map(n => parseInt(n, 10)));
+    // =========================================================
+    // WORLD LAYOUT (BIG TILEMAP)
+    // width = 60 tiles (1920px), height = 20 tiles (640px)
+    // You are free to extend/modify this map.
+    // =========================================================
+    const rawLevel = [
+      "000000000000000000000000000000000000000000000000000000000000",
+      "000000000000000000000000000000000000000000000000000000000000",
+      "000000000000000000000000000000000000000000000000000000000000",
+      "000000000000000000000000000000000000000000000000000000000000",
+      "000000000000000000000000000000000000000000000000000000000000",
+      "000000000000000000000000000000000000000000000000000000000000",
+      "000000000000000000000000000000000000000000000000000000000000",
+      "000000000000000000000000000000000000000000000000000000000000",
+      // left shaft / vertical "room"
+      "000000000000000000000000000000000000000000000000000000000000",
+      "000000000000000000000000000000000000000000000000000000000000",
+      "000000000000000000000000000000000000000000000000000000000000",
+      "000000000000000000000000000000000000000000000000000000000000",
+      "000000000000000000000000000000000000000000000000000000000000",
+      "111100000000000011111111000000000000000000000000000000000000",
+      "100100000000000010000001000000000000022220000000000000000000",
+      "100100000000000010000001000000000000011110000000000000000000",
+      "100100000000000010000001000000000000011110000000000000000000",
+      "100111110000000010000001000000002220011110000000000000000000",
+      "111111111111111111111111111111111111111111111111111111111111",
+      "111111111111111111111111111111111111111111111111111111111111"
+    ];
 
+    const levelData = rawLevel.map(row => row.split("").map(n => parseInt(n, 10)));
     const levelWidth = levelData[0].length;
     const levelHeight = levelData.length;
 
-    // =========================
+    // =========================================================
+    // CAMERA
+    // =========================================================
+    const camera = {
+      x: 0,
+      y: 0,
+      w: canvas.width,
+      h: canvas.height
+    };
+
+    function updateCamera() {
+      const targetX = player.x + player.w / 2 - camera.w / 2;
+      const targetY = player.y + player.h / 2 - camera.h / 2;
+
+      const smooth = 0.1;
+      camera.x += (targetX - camera.x) * smooth;
+      camera.y += (targetY - camera.y) * smooth;
+
+      // Clamp to world
+      camera.x = Math.max(0, Math.min(camera.x, levelWidth * TILE - camera.w));
+      camera.y = Math.max(0, Math.min(camera.y, levelHeight * TILE - camera.h));
+    }
+
+    // =========================================================
     // INPUT
-    // =========================
+    // =========================================================
     const keys = {};
     window.addEventListener("keydown", e => {
       keys[e.key.toLowerCase()] = true;
+      keys[e.key] = true;
       if (["ArrowLeft", "ArrowRight", "ArrowUp", " "].includes(e.key)) {
-        keys[e.key] = true;
         e.preventDefault();
       }
     });
@@ -113,70 +152,20 @@
     function isPurifyPressed() {
       return keys["e"];
     }
+    function isAttackPressed() {
+      return keys["j"] || keys["z"];
+    }
 
-    // =========================
-    // PLAYER
-    // =========================
-    const player = {
-      x: 64,
-      y: 64,
-      w: 24,
-      h: 32,
-      vx: 0,
-      vy: 0,
-      onGround: false,
-      facing: 1, // 1 right, -1 left
-      canDoubleJump: false,
-      isWallClinging: false,
-      wallDir: 0, // -1 left, 1 right
-      isDashing: false,
-      dashTimer: 0,
-      dashCooldown: 0,
-      alive: true,
-      respawnX: 64,
-      respawnY: 64
-    };
-
-    // =========================
-    // ENEMIES
-    // =========================
-    const enemies = [
-      {
-        x: 500,
-        y: 320,
-        w: 24,
-        h: 24,
-        vx: 1.2,
-        vy: 0,
-        leftBound: 450,
-        rightBound: 650,
-        corrupted: true
-      },
-      {
-        x: 350,
-        y: 256,
-        w: 24,
-        h: 24,
-        vx: -1.5,
-        vy: 0,
-        leftBound: 300,
-        rightBound: 520,
-        corrupted: false
-      }
-    ];
-
-    // =========================
-    // HELPERS
-    // =========================
+    // =========================================================
+    // TILE HELPERS
+    // =========================================================
     function getTileAtPixel(px, py) {
       const tx = Math.floor(px / TILE);
       const ty = Math.floor(py / TILE);
-      if (tx < 0 || ty < 0 || tx >= levelWidth || ty >= levelHeight) return TILE_SOLID;
+      if (tx < 0 || ty < 0 || tx >= levelWidth || ty >= levelHeight) {
+        return TILE_SOLID;
+      }
       return levelData[ty][tx];
-    }
-
-    function isSolidTile(t) {
-      return t === TILE_SOLID || t === TILE_CORRUPTED || t === TILE_PURIFIED;
     }
 
     function setTileAtPixel(px, py, val) {
@@ -186,9 +175,39 @@
       levelData[ty][tx] = val;
     }
 
+    function isSolidTile(t) {
+      return t === TILE_SOLID || t === TILE_CORRUPTED || t === TILE_PURIFIED;
+    }
+
     function aabbOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
       return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
     }
+
+    // =========================================================
+    // PLAYER
+    // =========================================================
+    const player = {
+      x: 4 * TILE,
+      y: 8 * TILE,
+      w: 24,
+      h: 32,
+      vx: 0,
+      vy: 0,
+      facing: 1,
+      onGround: false,
+      isWallClinging: false,
+      wallDir: 0,
+      isDashing: false,
+      dashTimer: 0,
+      dashCooldown: 0,
+      // attack
+      isAttacking: false,
+      attackTimer: 0,
+      attackCooldown: 0,
+      alive: true,
+      respawnX: 4 * TILE,
+      respawnY: 8 * TILE
+    };
 
     function resetPlayer() {
       player.x = player.respawnX;
@@ -196,15 +215,16 @@
       player.vx = 0;
       player.vy = 0;
       player.onGround = false;
+      player.isWallClinging = false;
       player.isDashing = false;
       player.dashTimer = 0;
       player.dashCooldown = 0;
+      player.isAttacking = false;
+      player.attackTimer = 0;
+      player.attackCooldown = 0;
       player.alive = true;
     }
 
-    // =========================
-    // UPDATE PLAYER
-    // =========================
     function updatePlayer() {
       if (!player.alive) return;
 
@@ -214,7 +234,7 @@
 
       if (move !== 0) player.facing = move;
 
-      // Dash handling
+      // Dash
       if (!player.isDashing && player.dashCooldown <= 0 && isDashPressed() && move !== 0) {
         player.isDashing = true;
         player.dashTimer = DASH_TIME;
@@ -229,14 +249,14 @@
           player.dashCooldown = DASH_COOLDOWN;
         }
       } else {
-        // Horizontal movement normal
+        // Normal horizontal movement
         player.vx += move * MOVE_SPEED;
         player.vx *= FRICTION;
         if (player.vx > MAX_X_SPEED) player.vx = MAX_X_SPEED;
         if (player.vx < -MAX_X_SPEED) player.vx = -MAX_X_SPEED;
       }
 
-      // Apply gravity
+      // Gravity
       player.vy += GRAVITY;
 
       // Wall clinging
@@ -244,52 +264,62 @@
       player.wallDir = 0;
 
       if (!player.onGround && !player.isDashing) {
-        // Check for wall on left
-        const leftTile1 = getTileAtPixel(player.x - 1, player.y + 4);
-        const leftTile2 = getTileAtPixel(player.x - 1, player.y + player.h - 4);
-        if (isSolidTile(leftTile1) || isSolidTile(leftTile2)) {
+        // Left wall
+        const left1 = getTileAtPixel(player.x - 1, player.y + 4);
+        const left2 = getTileAtPixel(player.x - 1, player.y + player.h - 4);
+        if (isSolidTile(left1) || isSolidTile(left2)) {
           if (isLeftPressed()) {
             player.isWallClinging = true;
             player.wallDir = -1;
           }
         }
-        // Check for wall on right
-        const rightTile1 = getTileAtPixel(player.x + player.w + 1, player.y + 4);
-        const rightTile2 = getTileAtPixel(player.x + player.w + 1, player.y + player.h - 4);
-        if (isSolidTile(rightTile1) || isSolidTile(rightTile2)) {
+        // Right wall
+        const right1 = getTileAtPixel(player.x + player.w + 1, player.y + 4);
+        const right2 = getTileAtPixel(player.x + player.w + 1, player.y + player.h - 4);
+        if (isSolidTile(right1) || isSolidTile(right2)) {
           if (isRightPressed()) {
             player.isWallClinging = true;
             player.wallDir = 1;
           }
         }
-
-        if (player.isWallClinging) {
-          // Slow falling
-          if (player.vy > 2) player.vy = 2;
-          player.canDoubleJump = true; // allow a "wall jump" + later double jump if you want to extend
+        if (player.isWallClinging && player.vy > 2) {
+          player.vy = 2; // slow sliding down
         }
       }
 
-      // Jump
+      // Jump / Wall jump
       if (isJumpPressed()) {
         if (player.onGround) {
           player.vy = JUMP_FORCE;
           player.onGround = false;
         } else if (player.isWallClinging) {
-          // Wall jump
           player.vy = WALL_JUMP_FORCE_Y;
           player.vx = -player.wallDir * WALL_JUMP_FORCE_X;
           player.isWallClinging = false;
         }
       }
 
-      // Move and collide
+      // Attack
+      if (!player.isAttacking && player.attackCooldown <= 0 && isAttackPressed()) {
+        player.isAttacking = true;
+        player.attackTimer = ATTACK_TIME;
+        player.attackCooldown = ATTACK_COOLDOWN;
+      }
+      if (player.isAttacking) {
+        player.attackTimer--;
+        if (player.attackTimer <= 0) {
+          player.isAttacking = false;
+        }
+      } else {
+        if (player.attackCooldown > 0) player.attackCooldown--;
+      }
+
+      // Move & collisions
       let newX = player.x + player.vx;
       let newY = player.y + player.vy;
 
-      // Horizontal collisions
+      // Horizontal collision
       if (player.vx > 0) {
-        // Moving right
         if (
           isSolidTile(getTileAtPixel(newX + player.w, player.y + 2)) ||
           isSolidTile(getTileAtPixel(newX + player.w, player.y + player.h - 2))
@@ -298,7 +328,6 @@
           player.vx = 0;
         }
       } else if (player.vx < 0) {
-        // Moving left
         if (
           isSolidTile(getTileAtPixel(newX, player.y + 2)) ||
           isSolidTile(getTileAtPixel(newX, player.y + player.h - 2))
@@ -308,10 +337,9 @@
         }
       }
 
-      // Vertical collisions
+      // Vertical collision
       let onGround = false;
       if (player.vy > 0) {
-        // Falling
         if (
           isSolidTile(getTileAtPixel(newX + 2, newY + player.h)) ||
           isSolidTile(getTileAtPixel(newX + player.w - 2, newY + player.h))
@@ -321,7 +349,6 @@
           onGround = true;
         }
       } else if (player.vy < 0) {
-        // Going up
         if (
           isSolidTile(getTileAtPixel(newX + 2, newY)) ||
           isSolidTile(getTileAtPixel(newX + player.w - 2, newY))
@@ -341,14 +368,16 @@
 
       // Purify nearby corrupted tiles
       if (isPurifyPressed()) {
-        const radius = 64;
+        const radius = 80;
+        const cx = player.x + player.w / 2;
+        const cy = player.y + player.h / 2;
         for (let ty = 0; ty < levelHeight; ty++) {
           for (let tx = 0; tx < levelWidth; tx++) {
             if (levelData[ty][tx] === TILE_CORRUPTED) {
               const centerX = tx * TILE + TILE / 2;
               const centerY = ty * TILE + TILE / 2;
-              const dx = centerX - (player.x + player.w / 2);
-              const dy = centerY - (player.y + player.h / 2);
+              const dx = centerX - cx;
+              const dy = centerY - cy;
               if (dx * dx + dy * dy < radius * radius) {
                 levelData[ty][tx] = TILE_PURIFIED;
               }
@@ -357,20 +386,46 @@
         }
       }
 
-      // Check falling out of world
-      if (player.y > canvas.height + 200) {
+      // Fall out of world
+      if (player.y > levelHeight * TILE + 200) {
         player.alive = false;
-        setTimeout(resetPlayer, 500);
+        setTimeout(resetPlayer, 400);
       }
     }
 
-    // =========================
-    // UPDATE ENEMIES
-    // =========================
+    // =========================================================
+    // ENEMIES
+    // =========================================================
+    const enemies = [
+      // lower area, central platform
+      { x: 22 * TILE, y: 13 * TILE, w: 24, h: 24, vx: 1.0, vy: 0, leftBound: 21 * TILE, rightBound: 26 * TILE, alive: true },
+      // corrupted zone on right
+      { x: 40 * TILE, y: 14 * TILE, w: 24, h: 24, vx: -1.2, vy: 0, leftBound: 37 * TILE, rightBound: 45 * TILE, alive: true },
+      { x: 45 * TILE, y: 14 * TILE, w: 24, h: 24, vx: 1.2, vy: 0, leftBound: 45 * TILE, rightBound: 53 * TILE, alive: true },
+      // upper left area (reachable via wall climbing)
+      { x: 8 * TILE, y: 12 * TILE, w: 24, h: 24, vx: 0.9, vy: 0, leftBound: 7 * TILE, rightBound: 12 * TILE, alive: true }
+    ];
+
+    function enemyGroundY(e) {
+      // simple: vertical collision with tiles below
+      e.vy += GRAVITY;
+      let newY = e.y + e.vy;
+      // check collision down
+      const footLeft  = getTileAtPixel(e.x + 2, newY + e.h);
+      const footRight = getTileAtPixel(e.x + e.w - 2, newY + e.h);
+      if (isSolidTile(footLeft) || isSolidTile(footRight)) {
+        newY = Math.floor((newY + e.h) / TILE) * TILE - e.h - 0.01;
+        e.vy = 0;
+      }
+      e.y = newY;
+    }
+
     function updateEnemies() {
       enemies.forEach(e => {
-        e.x += e.vx;
+        if (!e.alive) return;
 
+        // horizontal patrol
+        e.x += e.vx;
         if (e.x < e.leftBound) {
           e.x = e.leftBound;
           e.vx *= -1;
@@ -380,126 +435,139 @@
           e.vx *= -1;
         }
 
-        // Simple gravity / ground snap
-        e.vy += GRAVITY;
-        e.y += e.vy;
+        enemyGroundY(e);
 
-        // collide with ground
-        if (e.y + e.h > canvas.height - TILE * 2) {
-          e.y = canvas.height - TILE * 2 - e.h;
-          e.vy = 0;
+        // if no solid ground under, reverse direction
+        const underLeft  = getTileAtPixel(e.x + 4, e.y + e.h + 1);
+        const underRight = getTileAtPixel(e.x + e.w - 4, e.y + e.h + 1);
+        if (!isSolidTile(underLeft) && !isSolidTile(underRight)) {
+          e.vx *= -1;
         }
 
-        // Enemy "corrupted" state: faster and more dangerous
-        if (e.corrupted) {
-          // small behavior change
-          e.vx *= 1.0005;
-          if (e.vx > 2.5) e.vx = 2.5;
-          if (e.vx < -2.5) e.vx = -2.5;
-        }
-
-        // Collision with player
+        // collision with player (touch damage)
         if (player.alive && aabbOverlap(player.x, player.y, player.w, player.h, e.x, e.y, e.w, e.h)) {
-          if (e.corrupted) {
-            // corrupted enemy kills player
-            player.alive = false;
-            setTimeout(resetPlayer, 500);
-          } else {
-            // non-corrupted enemy just knocks player back
-            player.vx = (player.x < e.x ? -1 : 1) * -6;
-            player.vy = -6;
-          }
-        }
-
-        // If nearby purified tiles, enemy becomes purified (changes color only)
-        let nearPurified = false;
-        const px = Math.floor((e.x + e.w / 2) / TILE);
-        const py = Math.floor((e.y + e.h / 2) / TILE);
-        for (let oy = -1; oy <= 1; oy++) {
-          for (let ox = -1; ox <= 1; ox++) {
-            const tx = px + ox;
-            const ty = py + oy;
-            if (tx >= 0 && ty >= 0 && tx < levelWidth && ty < levelHeight) {
-              if (levelData[ty][tx] === TILE_PURIFIED) {
-                nearPurified = true;
-              }
-            }
-          }
-        }
-        if (nearPurified) {
-          e.corrupted = false;
+          // simple: kill player
+          player.alive = false;
+          setTimeout(resetPlayer, 400);
         }
       });
     }
 
-    // =========================
+    // Attack hitbox and enemy damage
+    function handlePlayerAttackOnEnemies() {
+      if (!player.isAttacking) return;
+
+      const range = 28;
+      const attackWidth = 26;
+      const attackHeight = 20;
+
+      const ax = player.facing > 0 ? player.x + player.w : player.x - attackWidth;
+      const ay = player.y + 4;
+
+      enemies.forEach(e => {
+        if (!e.alive) return;
+        if (aabbOverlap(ax, ay, attackWidth, attackHeight, e.x, e.y, e.w, e.h)) {
+          e.alive = false;
+        }
+      });
+
+      // visual (optional: debug draw, disabled in final to keep clean)
+      // ctx.fillStyle = "rgba(255,255,0,0.2)";
+      // ctx.fillRect(ax - camera.x, ay - camera.y, attackWidth, attackHeight);
+    }
+
+    // =========================================================
     // DRAW
-    // =========================
+    // =========================================================
     function drawLevel() {
-      for (let y = 0; y < levelHeight; y++) {
-        for (let x = 0; x < levelWidth; x++) {
+      const startX = Math.floor(camera.x / TILE);
+      const endX = Math.ceil((camera.x + camera.w) / TILE);
+      const startY = Math.floor(camera.y / TILE);
+      const endY = Math.ceil((camera.y + camera.h) / TILE);
+
+      for (let y = startY; y < endY; y++) {
+        for (let x = startX; x < endX; x++) {
+          if (y < 0 || y >= levelHeight || x < 0 || x >= levelWidth) continue;
           const t = levelData[y][x];
           if (t === TILE_EMPTY) continue;
-          const px = x * TILE;
-          const py = y * TILE;
-          if (t === TILE_SOLID) {
-            ctx.fillStyle = "#555";
-          } else if (t === TILE_CORRUPTED) {
-            ctx.fillStyle = "#6a0dad"; // purple
-          } else if (t === TILE_PURIFIED) {
-            ctx.fillStyle = "#1faa00"; // green
-          }
+
+          let color = "#555";
+          if (t === TILE_CORRUPTED) color = "#6a0dad";
+          else if (t === TILE_PURIFIED) color = "#2bbd1f";
+
+          const px = x * TILE - camera.x;
+          const py = y * TILE - camera.y;
+          ctx.fillStyle = color;
           ctx.fillRect(px, py, TILE, TILE);
         }
       }
     }
 
     function drawPlayer() {
+      const px = player.x - camera.x;
+      const py = player.y - camera.y;
+
       if (!player.alive) {
         ctx.globalAlpha = 0.4;
       }
-      ctx.fillStyle = "#00bfff";
-      ctx.fillRect(player.x, player.y, player.w, player.h);
 
-      // Eye / facing direction
+      ctx.fillStyle = "#00bfff";
+      ctx.fillRect(px, py, player.w, player.h);
+
+      // face
       ctx.fillStyle = "#fff";
-      const eyeX = player.facing > 0 ? player.x + player.w - 8 : player.x + 2;
-      const eyeY = player.y + 8;
+      const eyeX = player.facing > 0 ? px + player.w - 8 : px + 2;
+      const eyeY = py + 8;
       ctx.fillRect(eyeX, eyeY, 4, 4);
+
+      // attack visual
+      if (player.isAttacking) {
+        ctx.fillStyle = "rgba(255,255,0,0.4)";
+        const attackWidth = 26;
+        const attackHeight = 20;
+        const ax = player.facing > 0 ? px + player.w : px - attackWidth;
+        const ay = py + 4;
+        ctx.fillRect(ax, ay, attackWidth, attackHeight);
+      }
+
       ctx.globalAlpha = 1.0;
     }
 
     function drawEnemies() {
       enemies.forEach(e => {
-        ctx.fillStyle = e.corrupted ? "#ff3333" : "#ffcc00";
-        ctx.fillRect(e.x, e.y, e.w, e.h);
+        if (!e.alive) return;
+        const ex = e.x - camera.x;
+        const ey = e.y - camera.y;
+
+        ctx.fillStyle = "#ff3333";
+        ctx.fillRect(ex, ey, e.w, e.h);
+
         ctx.fillStyle = "#000";
-        ctx.fillRect(e.x + 6, e.y + 6, 4, 4);
+        ctx.fillRect(ex + 6, ey + 6, 4, 4);
       });
     }
 
     function drawUI() {
       ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(0, 0, 240, 60);
+      ctx.fillRect(0, 0, 260, 56);
       ctx.fillStyle = "#fff";
       ctx.font = "12px sans-serif";
-      ctx.fillText("Corrupted Zone Demo", 10, 18);
-      ctx.fillText("Purify (E) near purple tiles", 10, 32);
-      ctx.fillText("Dash (Shift), Jump (W/↑/Space)", 10, 46);
+      ctx.fillText("Corrupted Zone Metroidvania Demo", 10, 16);
+      ctx.fillText("Climb the shaft on the left to", 10, 30);
+      ctx.fillText("reach the upper area. Purify with E.", 10, 44);
     }
 
-    // =========================
+    // =========================================================
     // MAIN LOOP
-    // =========================
+    // =========================================================
     function loop() {
-      // Update
       updatePlayer();
       updateEnemies();
+      handlePlayerAttackOnEnemies();
+      updateCamera();
 
-      // Clear
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Draw
       drawLevel();
       drawEnemies();
       drawPlayer();
